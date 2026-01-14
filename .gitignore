@@ -1,0 +1,25 @@
+# Local config and tokens (contains secrets)
+.lark/
+
+# Go build artifacts
+lark-cal
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

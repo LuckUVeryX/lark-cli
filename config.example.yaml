@@ -1,0 +1,15 @@
+# Lark Calendar CLI Configuration
+# Copy this to .lark-cal/config.yaml and fill in your values
+
+# Lark App credentials (from https://open.larksuite.com Developer Console)
+app_id: "cli_xxxxxxxxxx"
+# app_secret should be set via LARK_APP_SECRET environment variable
+
+# Default settings
+defaults:
+  timezone: "Asia/Singapore"
+  reminder_minutes: 15
+
+# OAuth settings
+oauth:
+  redirect_port: 9999

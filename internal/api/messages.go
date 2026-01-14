@@ -1,0 +1,79 @@
+package api
+
+import (
+	"fmt"
+	"io"
+	"net/url"
+)
+
+// ListMessagesOptions contains optional parameters for ListMessages
+type ListMessagesOptions struct {
+	StartTime string // Unix timestamp in seconds
+	EndTime   string // Unix timestamp in seconds
+	SortType  string // ByCreateTimeAsc or ByCreateTimeDesc
+	PageSize  int    // 1-50, default 20
+	PageToken string // Pagination token
+}
+
+// ListMessages retrieves chat history from a chat or thread
+// containerIDType: "chat" for groups/private chats, "thread" for thread messages
+// containerID: chat_id or thread_id
+func (c *Client) ListMessages(containerIDType, containerID string, opts *ListMessagesOptions) ([]Message, bool, string, error) {
+	if containerIDType == "" {
+		containerIDType = "chat"
+	}
+
+	pageSize := 20
+	if opts != nil && opts.PageSize > 0 {
+		pageSize = opts.PageSize
+		if pageSize > 50 {
+			pageSize = 50
+		}
+	}
+
+	// Build query parameters
+	params := url.Values{}
+	params.Set("container_id_type", containerIDType)
+	params.Set("container_id", containerID)
+	params.Set("page_size", fmt.Sprintf("%d", pageSize))
+
+	if opts != nil {
+		if opts.StartTime != "" {
+			params.Set("start_time", opts.StartTime)
+		}
+		if opts.EndTime != "" {
+			params.Set("end_time", opts.EndTime)
+		}
+		if opts.SortType != "" {
+			params.Set("sort_type", opts.SortType)
+		}
+		if opts.PageToken != "" {
+			params.Set("page_token", opts.PageToken)
+		}
+	}
+
+	path := "/im/v1/messages?" + params.Encode()
+
+	var resp MessageListResponse
+	if err := c.GetWithTenantToken(path, &resp); err != nil {
+		return nil, false, "", err
+	}
+
+	if resp.Code != 0 {
+		return nil, false, "", fmt.Errorf("API error %d: %s", resp.Code, resp.Msg)
+	}
+
+	return resp.Data.Items, resp.Data.HasMore, resp.Data.PageToken, nil
+}
+
+// GetMessageResource downloads a resource file (image, video, audio, file) from a message
+// resourceType must be "image" or "file" (file covers files, audio, and video)
+// Returns the response body (caller must close), content-type, and any error
+func (c *Client) GetMessageResource(messageID, fileKey, resourceType string) (io.ReadCloser, string, error) {
+	if resourceType != "image" && resourceType != "file" {
+		return nil, "", fmt.Errorf("invalid resource type: %s (must be 'image' or 'file')", resourceType)
+	}
+
+	path := fmt.Sprintf("/im/v1/messages/%s/resources/%s?type=%s", messageID, fileKey, resourceType)
+	return c.DownloadWithTenantToken(path)
+}

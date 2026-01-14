@@ -1,0 +1,187 @@
+package api
+
+import (
+	"fmt"
+	"io"
+	"net/url"
+	"strconv"
+)
+
+// GetDocument retrieves document metadata
+// documentID: the document ID (token from document URL)
+func (c *Client) GetDocument(documentID string) (*Document, error) {
+	path := fmt.Sprintf("/docx/v1/documents/%s", url.PathEscape(documentID))
+
+	var resp DocumentResponse
+	if err := c.Get(path, &resp); err != nil {
+		return nil, err
+	}
+
+	if resp.Code != 0 {
+		return nil, fmt.Errorf("API error %d: %s", resp.Code, resp.Msg)
+	}
+
+	return resp.Data.Document, nil
+}
+
+// GetDocumentContent retrieves document content as markdown
+// documentID: the document ID (token from document URL)
+func (c *Client) GetDocumentContent(documentID string) (string, error) {
+	path := fmt.Sprintf("/docs/v1/content?doc_token=%s&doc_type=docx&content_type=markdown",
+		url.QueryEscape(documentID))
+
+	var resp DocumentContentResponse
+	if err := c.Get(path, &resp); err != nil {
+		return "", err
+	}
+
+	if resp.Code != 0 {
+		return "", fmt.Errorf("API error %d: %s", resp.Code, resp.Msg)
+	}
+
+	return resp.Data.Content, nil
+}
+
+// GetDocumentBlocks retrieves all blocks in a document with pagination
+// documentID: the document ID (token from document URL)
+func (c *Client) GetDocumentBlocks(documentID string) ([]DocumentBlock, error) {
+	var allBlocks []DocumentBlock
+	pageToken := ""
+
+	for {
+		path := fmt.Sprintf("/docx/v1/documents/%s/blocks?page_size=500",
+			url.PathEscape(documentID))
+		if pageToken != "" {
+			path += "&page_token=" + url.QueryEscape(pageToken)
+		}
+
+		var resp DocumentBlocksResponse
+		if err := c.Get(path, &resp); err != nil {
+			return nil, err
+		}
+
+		if resp.Code != 0 {
+			return nil, fmt.Errorf("API error %d: %s", resp.Code, resp.Msg)
+		}
+
+		allBlocks = append(allBlocks, resp.Data.Items...)
+
+		if !resp.Data.HasMore || resp.Data.PageToken == "" {
+			break
+		}
+		pageToken = resp.Data.PageToken
+	}
+
+	return allBlocks, nil
+}
+
+// ListFolderItems lists items in a Lark Drive folder
+// folderToken: folder token (empty for root cloud space)
+// pageSize: number of items per page (max 200)
+// pageToken: pagination token
+func (c *Client) ListFolderItems(folderToken string, pageSize int, pageToken string) ([]FolderItem, bool, string, error) {
+	params := url.Values{}
+	if folderToken != "" {
+		params.Set("folder_token", folderToken)
+	}
+	if pageSize > 0 {
+		params.Set("page_size", strconv.Itoa(pageSize))
+	}
+	if pageToken != "" {
+		params.Set("page_token", pageToken)
+	}
+
+	path := "/drive/v1/files"
+	if len(params) > 0 {
+		path += "?" + params.Encode()
+	}
+
+	var resp ListFolderItemsResponse
+	if err := c.Get(path, &resp); err != nil {
+		return nil, false, "", err
+	}
+	if resp.Code != 0 {
+		return nil, false, "", fmt.Errorf("API error %d: %s", resp.Code, resp.Msg)
+	}
+
+	return resp.Data.Files, resp.Data.HasMore, resp.Data.NextPageToken, nil
+}
+
+// GetDocumentComments retrieves all comments for a document with pagination
+// fileToken: the document token (same as document ID)
+// fileType: document type (e.g., "docx", "doc", "sheet")
+func (c *Client) GetDocumentComments(fileToken, fileType string) ([]DocumentComment, error) {
+	var allComments []DocumentComment
+	pageToken := ""
+
+	for {
+		path := fmt.Sprintf("/drive/v1/files/%s/comments?file_type=%s&page_size=100",
+			url.PathEscape(fileToken), url.QueryEscape(fileType))
+		if pageToken != "" {
+			path += "&page_token=" + url.QueryEscape(pageToken)
+		}
+
+		var resp DocumentCommentsResponse
+		if err := c.Get(path, &resp); err != nil {
+			return nil, err
+		}
+
+		if resp.Code != 0 {
+			return nil, fmt.Errorf("API error %d: %s", resp.Code, resp.Msg)
+		}
+
+		allComments = append(allComments, resp.Data.Items...)
+
+		if !resp.Data.HasMore || resp.Data.PageToken == "" {
+			break
+		}
+		pageToken = resp.Data.PageToken
+	}
+
+	return allComments, nil
+}
+
+// GetMediaTempDownloadURL gets a temporary download URL for a media file
+// fileToken: the media token (e.g., image token from block)
+// documentID: optional document ID for authentication (required for document images)
+// Returns the temporary download URL (valid for 24 hours)
+func (c *Client) GetMediaTempDownloadURL(fileToken, documentID string) (string, error) {
+	path := fmt.Sprintf("/drive/v1/medias/batch_get_tmp_download_url?file_tokens=%s",
+		url.QueryEscape(fileToken))
+
+	// Add extra parameter with document ID if provided
+	if documentID != "" {
+		extra := fmt.Sprintf(`{"drive_route_token":"%s"}`, documentID)
+		path += "&extra=" + url.QueryEscape(extra)
+	}
+
+	var resp MediaTempDownloadURLResponse
+	if err := c.Get(path, &resp); err != nil {
+		return "", err
+	}
+
+	if resp.Code != 0 {
+		return "", fmt.Errorf("API error %d: %s", resp.Code, resp.Msg)
+	}
+
+	if len(resp.Data.TmpDownloadURLs) == 0 {
+		return "", fmt.Errorf("no download URL returned for token %s", fileToken)
+	}
+
+	return resp.Data.TmpDownloadURLs[0].TmpDownloadURL, nil
+}
+
+// DownloadMedia downloads a media file (image, attachment) from a document
+// fileToken: the media token (e.g., image token from block)
+// documentID: optional document ID for authentication (required for document images)
+// Returns the file content as a ReadCloser and the content type
+func (c *Client) DownloadMedia(fileToken, documentID string) (io.ReadCloser, string, error) {
+	// Try direct download API first with extra parameter
+	path := fmt.Sprintf("/drive/v1/medias/%s/download", url.PathEscape(fileToken))
+	if documentID != "" {
+		extra := fmt.Sprintf(`{"drive_route_token":"%s"}`, documentID)
+		path += "?extra=" + url.QueryEscape(extra)
+	}
+
+	return c.Download(path)
+}
